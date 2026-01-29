@@ -1,0 +1,63 @@
+on:
+  workflow_call:
+    inputs:
+      cluster:
+        required: true
+        type: string
+      changed_configurations:
+        required: true
+        type: string
+
+env:
+  AWS_REGION: us-east-2
+
+jobs:
+  validate_deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install kubeval
+        if: github.event_name == 'pull_request'
+        run: |
+          curl -L https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz | tar xz
+          sudo mv kubeval /usr/local/bin/
+
+      - name: Validate manifests
+        if: github.event_name == 'pull_request'
+        run: |
+          for file in ${{ inputs.changed_configurations }}; do
+            kubeval --strict --ignore-missing-schemas {{ inputs.changed_configurations }}
+          done
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: "arn:aws:iam::721500739616:role/sentinel-github-actions-eks"
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ inputs.cluster }} \
+            --region ${{ env.AWS_REGION }}
+
+      - name: kubectl dry-run
+        if: github.event_name == 'pull_request'
+        run: |
+          for file in ${{ inputs.changed_configurations }}; do
+            kubectl apply --dry-run=server -f {{ inputs.changed_configurations }}
+          done
+
+      - name: kubectl apply
+        if: github.ref == 'refs/heads/main'
+        run: |
+          for file in ${{ inputs.changed_configurations }}; do
+            kubectl apply -f {{ inputs.changed_configurations }}
+          done

@@ -1,0 +1,62 @@
+name: Infra Deployment
+
+on:
+#   pull_request:
+#     paths:
+#       - 'infrastructure/**'
+#   push:
+#     branches:
+#       - main
+#     paths:
+#       - 'infrastructure/**'  
+
+permissions:
+  id-token: write
+  deployments: write
+  pull-requests: write
+  contents: write
+
+env:
+  AWS_REGION: us-east-2
+  TF_VERSION: 1.14.3
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: "arn:aws:iam::721500739616:role/sentinel-github-actions-terraform"
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init & validate
+        run: terraform init --upgrade && terraform validate
+        working-directory: infrastructure
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v6
+
+      - name: Run TFLint
+        working-directory: infrastructure
+        run: tflint --init && tflint
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Terraform Plan
+        if: github.event_name == 'pull_request'
+        working-directory: infrastructure
+        run: terraform plan -no-color
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main'
+        working-directory: infrastructure
+        run: terraform apply -auto-approve

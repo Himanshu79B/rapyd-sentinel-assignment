@@ -1,0 +1,62 @@
+name: App Deployment
+
+on:
+#   pull_request:
+#     paths:
+#       - 'application/**'
+#   push:
+#     branches:
+#       - main
+#     paths:
+#       - 'application/**'
+
+env:
+  KUBECTL_VERSION: 1.34.0
+
+permissions:
+  id-token: write
+  deployments: write
+  pull-requests: write
+  contents: write
+
+jobs:
+  changed_configurations:
+    runs-on: ubuntu-latest
+    outputs:
+      backend_configs: ${{ steps.files.outputs.backend_configs }}
+      gateway_configs: ${{ steps.files.outputs.gateway_configs }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      - name: Get changed files
+        id: files
+        run: |
+          changes=$(git diff --name-only HEAD~1)
+          for file in $changes; do
+            if [[ $file == "application/backend/"* ]]; then
+              backend_configs+="$file "
+            elif [[ $file == "application/gateway"* ]]; then
+              gateway_configs+="$file "
+            fi
+          done
+          echo "backend_configs=$backend_configs" >> $GITHUB_OUTPUT
+          echo "gateway_configs=$gateway_configs" >> $GITHUB_OUTPUT
+
+  backend:
+    needs: changed_configurations
+    if: needs.changed_configurations.outputs.backend_configs != ''
+    uses: ./.github/workflows/app-lib.yml
+    with:
+      cluster: eks-backend
+      changed_configurations: "${{ needs.configurations.outputs.backend_configs }}"
+
+  gateway:
+    needs: changed_configurations
+    if: needs.changed_configurations.outputs.gateway_configs != ''
+    uses: ./.github/workflows/app-lib.yml
+    with:
+      cluster: eks-gateway
+      changed_configurations: "${{ needs.configurations.outputs.gateway_configs }}"

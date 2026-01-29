@@ -8,82 +8,100 @@ The project is divided into 3 sections:
   3. [ci_cd](./ci_cd) : It stores the terraform code for CI/CD Operations.
 
 ### Instructions to use and deploy the project from scratch
-<details><summary>Step 1 : Pre-Requisites - Infrastructure Deployment</summary>
+<details><summary><b>Step 1 : Pre-Requisites - Infrastructure Deployment</b></summary>
+
   a) Since you are deploying infrastructure and applications manually first and not with CI/CD, Please configure your local aws profile to have administrator access.
+
   b) Create an s3 bucket to store the terraform state.
-  c) Switch to infrastructure directory. Update terraform block and aws provider block with your profile, region and credentials in providers.tf file.  
+
+  c) Switch to infrastructure directory. Update terraform block and aws provider block with your profile, region and credentials in providers.tf file. 
+
   d) Run `terraform init --upgrade` to initalize the backend.
 
-  NOTE: The project is written with terraform version 1.14.X. Please make sure you use the exact version or update it accordingly.
+  <b>NOTE: The project is written with terraform version 1.14.X. Please make sure you use the exact version or update it accordingly.</b>
 </details>
 
-<details><summary>Step 2 : Infrastructure Deployment</summary>
+<details><summary><b>Step 2 : Infrastructure Deployment</b></summary>
+  
   a) Switch to infrastructure/backend directory. Update api_access_config.access_cidrs attribute of eks module attribute with your local machine IP. This setting will make the EKS API public which will be used later to deploy application manifest. Do the same thing in infrastructure/gateway.
-  b) Run Command : terraform validate && terraform plan -out=tfplan. This will generate your plan and store it in a tfplan file. Go through the list of resources getting created.
-  c) Once everything is approved, Run Command : terraform apply. Wait for the resources to get created.
+
+  b) Run Command : `terraform validate && terraform plan -out=tfplan`. This will generate your plan and store it in a tfplan file. Go through the list of resources getting created.
+
+  c) Once everything is approved, Run Command : `terraform apply`. Wait for the resources to get created.
+
   d) It should create:
+   ```yaml
      - VPCs : vpc-gateway and vpc-backend
      - EKS Clusters : eks-gateway and eks-backend
      - Private VPC Peering with Transit Gateway 
      - Security group rules to allow traffic from cross-VPC/Cross-EKS Worker nodes.
      - Required IAM roles and resources to deploy AWS Loadbalancer Controller
+```
 </details>
 
-<details><summary>Step 3 : Pre-requisite - Application Deployment </summary>
-  a) Create EKS Access Entries for your local aws user and associate cluster administrator policy to it for both EKS Clusters. 
+<details><summary><b>Step 3 : Pre-requisite - Application Deployment</b></summary>
 
-     ```yaml
+  a) Create EKS Access Entries for your local aws user and associate cluster administrator policy to it for both EKS Clusters. 
+```yaml
      aws eks create-access-entry --cluster-name {cluster-name} --principal-arn {USER_IAM_ROLE_ARN} --type STANDARD --region {REGION} --profile {PROFILE}
 
      aws eks associate-access-policy --cluster-name {cluster-name} --principal-arn {USER_IAM_ROLE_ARN} --policy-arn arn:aws:eks::aws:cluster-access-policy/ AmazonEKSClusterAdminPolicy --access-scope type=cluster --region {REGION} --profile {PROFILE}
-     ```
+```
 
   b) Update local kube-config for both eks clusters.
 
-     ```yaml
+```yaml
      aws eks update-kubeconfig --name {cluster-name} --region {REGION} --profile {PROFILE}
-     ```
+```
 
   c) you will now be able to communicate with EKS API server and can deploy manifests.
 </details>
 
-<details><summary>Step 4 : Application Deployment </summary>
-  a) Install AWS Load Balancer Controller in both EKS. 
+<details><summary><b>Step 4 : Application Deployment </b></summary>
 
-     ```yaml
+  a) Install AWS Load Balancer Controller in both EKS. 
+```yaml
      i)  Install cert-manager CRDS.
          kubectl apply --validate=false -f https://github.com/cert-manager/cert-manager/releases/download/v{CERT_MANAGER_VERSION}/cert-manager.yaml
 
      ii) Download AWS Load Balancer Controller manifest and update --cluster-name in Deployment. The file is already downloaded in application/{application} directory
          wget https://github.com/kubernetes-sigs/aws-load-balancer-controller/releases/download/v3.0.0/v3_0_0_full.yaml -o load-balancer-controller.yaml
          kubectl apply -f load-balancer-controller.yaml
-     ```
+```
 
   b) Switch the kube context to communicate with eks-backend cluster. Go to application/backend directory and run : kubectl apply -f backend.yaml. This will create:
+```yaml  
      - Namespace 
      - ConfigMap serving as index.html mounted in backend pod 
      - Deployment
      - Service of type Loadbalancer(internal) Allowing Traffic only from gateway VPC CIDR
-     - Network Policy to deny all traffic  
+     - Network Policy to deny all traffic 
+``` 
 
   c) Note the DNS of the generated NLB for backend application.
-  d) Go to application/gateway directory and update the proxy configuration in configmap manifest to proxy traffic to backend NLB. Switch the kube context to communicate with eks-gateway cluster and run : kubectl apply -f backend.yaml. This will create: 
+
+  d) Go to application/gateway directory and update the proxy configuration in configmap manifest to proxy traffic to backend NLB. Switch the kube context to communicate with eks-gateway cluster and run : kubectl apply -f backend.yaml. 
+  This will create: 
+```yaml  
      - Namespace
      - ConfigMap serving as index.html mounted in gateway pod.
      - Deployment
      - Service of type Loadbalancer(public) Allowing Traffic only from Internet.
+```
 </details>
 
-<details><summary>Step 5 : Application Validation </summary>
+<details><summary><b>Step 5 : Application Validation</b></summary>
+  
   a) Browse the DNS of Gateway NLB. It should render the content of backend app.
 </details>
 
-<details><summary>Step 6 : Setup GitHub OIDC federation for CI/CD</summary>
-  a) Switch to ci_cd directory and apply terraform. It will create required role and policies to Setup GitHub OIDC federation for CI/CD
-</details>
+<details><summary><b>Step 6 : Setup GitHub OIDC federation for CI/CD</b></summary>
 
-<details><summary>Step 7 : Use Roles created in step 6 in CI/CD Workflows</summary>
-  a) Update github action in CI/CD Worflows : aws-actions/configure-aws-credentials@v5
+  a) Switch to ci_cd directory and apply terraform. It will create required role and policies to Setup GitHub OIDC federation for CI/CD.
+
+  b) Create an eks_access_entry in both EKS to allow github Federated role to apply patches to workloads
+
+  c) Update github action in CI/CD Worflows : aws-actions/configure-aws-credentials@v5
 ```yaml
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5
@@ -91,8 +109,10 @@ The project is divided into 3 sections:
           role-to-assume: "arn:aws:iam::Account-name:role/GITHUB_OIDC_FEDERATED_ROLE"
           aws-region: ${{ env.AWS_REGION }}
 ```
-
+  
+  d) CI/CD is now ready to communicate with EKS without using AWS Credentials.
 </details>
+
 
 ## How networking is configured between VPCs & EKS clusters
 ```yaml
